@@ -8,12 +8,7 @@ open Microsoft.CodeAnalysis.Text
 open Microsoft.FSharp.Compiler
 open Microsoft.FSharp.Compiler.Ast
 open Microsoft.FSharp.Compiler.SourceCodeServices
-open TypedAstUtils
 
-type CheckResults =
-    | Ready of (FSharpParseFileResults * FSharpCheckFileResults) option
-    | StillRunning of Async<(FSharpParseFileResults * FSharpCheckFileResults) option>
-    
 type FSharpChecker with
     member checker.ParseDocument(document: Document, parsingOptions: FSharpParsingOptions, sourceText: string, userOpName: string) =
         asyncMaybe {
@@ -25,53 +20,54 @@ type FSharpChecker with
         checker.ParseDocument(document, parsingOptions, sourceText=sourceText.ToString(), userOpName=userOpName)
 
     member checker.ParseAndCheckDocument(filePath: string, textVersionHash: int, sourceText: string, options: FSharpProjectOptions, allowStaleResults: bool, userOpName: string) =
-        let parseAndCheckFile =
-            async {
-                let! parseResults, checkFileAnswer = checker.ParseAndCheckFileInProject(filePath, textVersionHash, sourceText, options, userOpName=userOpName)
-                return
-                    match checkFileAnswer with
-                    | FSharpCheckFileAnswer.Aborted -> 
-                        None
-                    | FSharpCheckFileAnswer.Succeeded(checkFileResults) ->
-                        Some (parseResults, checkFileResults)
-            }
+        async {
+            let parseAndCheckFile =
+                async {
+                    let! parseResults, checkFileAnswer = checker.ParseAndCheckFileInProject(filePath, textVersionHash, sourceText, options, userOpName=userOpName)
+                    return
+                        match checkFileAnswer with
+                        | FSharpCheckFileAnswer.Aborted -> 
+                            None
+                        | FSharpCheckFileAnswer.Succeeded(checkFileResults) ->
+                            Some (parseResults, checkFileResults)
+                }
 
-        let tryGetFreshResultsWithTimeout() : Async<CheckResults> =
-            async {
-                try
-                    let! worker = Async.StartChild(parseAndCheckFile, 2000)
-                    let! result = worker 
-                    return Ready result
-                with :? TimeoutException ->
-                    return StillRunning parseAndCheckFile
-            }
+            let tryGetFreshResultsWithTimeout() =
+                async {
+                    let! worker = Async.StartChild(parseAndCheckFile, millisecondsTimeout=Settings.LanguageServicePerformance.TimeUntilStaleCompletion)
+                    try
+                        return! worker
+                    with :? TimeoutException ->
+                        return None // worker is cancelled at this point, we cannot return it and wait its completion anymore
+                }
 
-        let bindParsedInput(results: (FSharpParseFileResults * FSharpCheckFileResults) option) =
-            match results with
-            | Some(parseResults, checkResults) ->
-                match parseResults.ParseTree with
-                | Some parsedInput -> Some (parseResults, parsedInput, checkResults)
+            let bindParsedInput(results: (FSharpParseFileResults * FSharpCheckFileResults) option) =
+                match results with
+                | Some(parseResults, checkResults) ->
+                    match parseResults.ParseTree with
+                    | Some parsedInput -> Some (parseResults, parsedInput, checkResults)
+                    | None -> None
                 | None -> None
-            | None -> None
 
-        if allowStaleResults then
-            async {
+            if allowStaleResults then
                 let! freshResults = tryGetFreshResultsWithTimeout()
                     
                 let! results =
                     match freshResults with
-                    | Ready x -> async.Return x
-                    | StillRunning worker ->
+                    | Some x -> async.Return (Some x)
+                    | None ->
                         async {
-                            match allowStaleResults, checker.TryGetRecentCheckResultsForFile(filePath, options) with
-                            | true, Some (parseResults, checkFileResults, _) ->
+                            match checker.TryGetRecentCheckResultsForFile(filePath, options) with
+                            | Some (parseResults, checkFileResults, _) ->
                                 return Some (parseResults, checkFileResults)
-                            | _ ->
-                                return! worker
+                            | None ->
+                                return! parseAndCheckFile
                         }
                 return bindParsedInput results
-            }
-        else parseAndCheckFile |> Async.map bindParsedInput
+            else 
+                let! results = parseAndCheckFile
+                return bindParsedInput results
+        }
 
 
     member checker.ParseAndCheckDocument(document: Document, options: FSharpProjectOptions, allowStaleResults: bool, userOpName: string, ?sourceText: SourceText) =
@@ -108,15 +104,15 @@ type FSharpChecker with
                         match symbolUse.Symbol with
                         // Make sure that unsafe manipulation isn't executed if unused opens are disabled
                         | _ when not checkForUnusedOpens -> None
-                        | TypedAstPatterns.MemberFunctionOrValue func when func.IsExtensionMember ->
+                        | Symbol.MemberFunctionOrValue func when func.IsExtensionMember ->
                             if func.IsProperty then
                                 let fullNames =
                                     [|  if func.HasGetterMethod then
-                                            match func.GetterMethod.EnclosingEntity with 
+                                            match func.GetterMethod.DeclaringEntity with 
                                             | Some e -> yield e.TryGetFullName()
                                             | None -> ()
                                         if func.HasSetterMethod then
-                                            match func.SetterMethod.EnclosingEntity with 
+                                            match func.SetterMethod.DeclaringEntity with 
                                             | Some e -> yield e.TryGetFullName()
                                             | None -> ()
                                     |]
@@ -125,9 +121,9 @@ type FSharpChecker with
                                 | [||]  -> None 
                                 | _     -> Some fullNames
                             else 
-                                match func.EnclosingEntity.Value with
+                                match func.DeclaringEntity with
                                 // C# extension method
-                                | TypedAstPatterns.FSharpEntity TypedAstPatterns.Class ->
+                                | Some (Symbol.FSharpEntity Symbol.Class) ->
                                     let fullName = symbolUse.Symbol.FullName.Split '.'
                                     if fullName.Length > 2 then
                                         (* For C# extension methods FCS returns full name including the class name, like:
@@ -142,9 +138,9 @@ type FSharpChecker with
                                     else None
                                 | _ -> None
                         // Operators
-                        | TypedAstPatterns.MemberFunctionOrValue func ->
+                        | Symbol.MemberFunctionOrValue func ->
                             match func with
-                            | TypedAstPatterns.Constructor _ ->
+                            | Symbol.Constructor _ ->
                                 // full name of a constructor looks like "UnusedSymbolClassifierTests.PrivateClass.( .ctor )"
                                 // to make well formed full name parts we cut "( .ctor )" from the tail.
                                 let fullName = func.FullName
@@ -160,16 +156,16 @@ type FSharpChecker with
                                         | Some idents -> yield String.concat "." idents
                                         | None -> ()
                                     |]
-                        | TypedAstPatterns.FSharpEntity e ->
+                        | Symbol.FSharpEntity e ->
                             match e with
-                            | e, TypedAstPatterns.Attribute, _ ->
+                            | e, Symbol.Attribute, _ ->
                                 e.TryGetFullName ()
                                 |> Option.map (fun fullName ->
                                     [| fullName; fullName.Substring(0, fullName.Length - "Attribute".Length) |])
                             | e, _, _ -> 
                                 e.TryGetFullName () |> Option.map (fun fullName -> [| fullName |])
-                        | TypedAstPatterns.RecordField _
-                        | TypedAstPatterns.UnionCase _ as symbol ->
+                        | Symbol.RecordField _
+                        | Symbol.UnionCase _ as symbol ->
                             Some [| let fullName = symbol.FullName
                                     yield fullName
                                     let idents = fullName.Split '.'

@@ -3,19 +3,20 @@
 <Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
 
   <PropertyGroup>
-    <FSCoreVersion>4.4.1.0</FSCoreVersion>
+    <FSCoreVersion>4.4.3.0</FSCoreVersion>
     <OutputPath>$(MSBuildThisFileDirectory)../../BuildFromSource/$(Configuration)/bin</OutputPath>
     <FSharpSourcesRoot>$(MSBuildThisFileDirectory)..</FSharpSourcesRoot>
 
     <DisableImplicitSystemValueTupleReference>true</DisableImplicitSystemValueTupleReference>
     <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>
     <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <UseStandardResourceNames>false</UseStandardResourceNames>
     <DefineConstants>$(DefineConstants);BUILD_FROM_SOURCE</DefineConstants>
 
     <!-- Signing flags currently done using OtherFlags.  Can migrate to properties once build target updated -->
     <KeyFile>$(MSBuildThisFileDirectory)../buildtools/keys/MSFT.snk</KeyFile>
     <PublicSign>true</PublicSign>
-    <OtherFlags>$(OtherFlags) --publicsign --keyfile:$(KeyFile)</OtherFlags>
+    <OtherFlags>$(OtherFlags) --publicsign --keyfile:"$(KeyFile)"</OtherFlags>
     <OtherFlags>$(OtherFlags) --nocopyfsharpcore</OtherFlags>
 
     <DotNetExe Condition=" '$(OS)' == 'Unix' ">dotnet</DotNetExe>
@@ -35,64 +36,6 @@
 
   <Import Project="..\FSharpSource.Profiles.targets" />
   <Import Project="$(BuildVersionFilePath)" Condition="Exists('$(BuildVersionFilePath)')" />
-
-  <Target Name="CopyAndSubstituteTextFiles" 
-          BeforeTargets="Compile"
-          Inputs="@(CopyAndSubstituteText)"
-          Outputs="@(CopyAndSubstituteText->'$(OutDir)%(TargetFilename)')"
-          Condition="'$(DesignTimeBuild)' != 'true'">
-
-    <ItemGroup>
-        <Results Include="@(CopyAndSubstituteText->'$(OutDir)%(TargetFilename)')">
-            <Lines>
-                $([System.Text.RegularExpressions.Regex]::Replace($([System.IO.File]::ReadAllText("%(CopyAndSubstituteText.FullPath)")), "%(CopyAndSubstituteText.Pattern1)", "%(CopyAndSubstituteText.Replacement1)"))
-            </Lines>
-            <Lines  Condition = "'%(CopyAndSubstituteText.Pattern2)' != ''">
-                $([System.Text.RegularExpressions.Regex]::Replace($(FileText), "%(CopyAndSubstituteText.Pattern2)", "%(CopyAndSubstituteText.Replacement2)"))
-            </Lines>
-        </Results>
-    </ItemGroup>
-    
-    <WriteLinesToFile File="$(OutDir)%(Results.Filename)%(Results.Extension)" Lines="%(Results.Lines)" Overwrite="true" />
-  </Target>
-
-  <!--
-  =========================================================================
-    Build FsSrGen files.
-  =========================================================================
-  -->
-  <Target Name="CallFsSrGen"
-          Inputs="@(FsSrGen)"
-          Outputs="@(FsSrGen->'$(IntermediateOutputPath)%(Filename).fs');@(FsSrGen->'$(IntermediateOutputPath)%(Filename).resx')"
-          Condition="'@(FsSrGen)' != ''">
-
-    <PropertyGroup>
-      <FsSrGenPath>$(MSBuildThisFileDirectory)../../Tools/fssrgen/fssrgen.dll</FsSrGenPath>
-    </PropertyGroup>
-
-    <!-- Create the output directory in case it doesn't exist yet -->
-    <MakeDir Directories="$(IntermediateOutputPath)" />
-
-    <!-- Run the tool -->
-    <Exec Command="&quot;$(DotNetExePath)&quot; &quot;$(FsSrGenPath)&quot; &quot;%(FsSrGen.FullPath)&quot; &quot;$(IntermediateOutputPath)%(FsSrGen.Filename).fs&quot;  &quot;$(IntermediateOutputPath)%(FsSrGen.Filename).resx&quot; $(FsSrGenProjectName)" />
-  </Target>
-
-  <Target Name="ProcessFsSrGen"
-          DependsOnTargets="CallFsSrGen"
-          Condition="'@(FsSrGen)'!=''"
-          BeforeTargets="CoreResGen">
-
-    <ItemGroup>
-      <CompileBefore Include="$(IntermediateOutputPath)%(FsSrGen.Filename).fs" />
-      <FileWrites Include="$(IntermediateOutputPath)%(FsSrGen.Filename).fs" />
-      <FileWrites Include="$(IntermediateOutputPath)%(FsSrGen.Filename).resx" />
-      <EmbeddedResource Include="$(IntermediateOutputPath)%(FsSrGen.Filename).resx">
-        <ManifestResourceName>%(FsSrGen.Filename)</ManifestResourceName>
-        <Type>Resx</Type>
-        <WithCulture>false</WithCulture>
-      </EmbeddedResource>
-    </ItemGroup>
-  </Target>
 
   <ItemGroup>
     <AvailableItemName Include="FsLex">

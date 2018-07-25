@@ -104,6 +104,8 @@ type internal FSharpDocumentDiagnosticAnalyzer() =
             return results
         }
 
+    override __.Priority = 10 // Default = 50
+
     override this.SupportedDiagnostics = RoslynHelpers.SupportedDiagnostics()
 
     override this.AnalyzeSyntaxAsync(document: Document, cancellationToken: CancellationToken): Task<ImmutableArray<Diagnostic>> =
@@ -122,7 +124,7 @@ type internal FSharpDocumentDiagnosticAnalyzer() =
     override this.AnalyzeSemanticsAsync(document: Document, cancellationToken: CancellationToken): Task<ImmutableArray<Diagnostic>> =
         let projectInfoManager = getProjectInfoManager document
         asyncMaybe {
-            let! parsingOptions, projectOptions = projectInfoManager.TryGetOptionsForDocumentOrProject(document) 
+            let! parsingOptions, _, projectOptions = projectInfoManager.TryGetOptionsForDocumentOrProject(document) 
             let! sourceText = document.GetTextAsync(cancellationToken)
             let! textVersion = document.GetTextVersionAsync(cancellationToken)
             return! 

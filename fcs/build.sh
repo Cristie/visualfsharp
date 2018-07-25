@@ -4,8 +4,6 @@ then
   # use .Net
   cmd fcs/build.cmd $@ 
 else
-  mono .nuget/NuGet.exe restore -PackagesDirectory packages
-
   cd fcs
 
   # use mono
@@ -13,8 +11,6 @@ else
     mozroots --import --sync --quiet
   fi
   
-  dotnet restore tools.fsproj
-
   mono .paket/paket.exe restore
   exit_code=$?
   if [ $exit_code -ne 0 ]; then

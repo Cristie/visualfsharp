@@ -17,7 +17,7 @@ open Microsoft.VisualStudio.OLE.Interop
 open Microsoft.FSharp.Compiler
 open Microsoft.FSharp.Compiler.SourceCodeServices
 open Microsoft.VisualStudio.FSharp.LanguageService
-open Microsoft.VisualStudio.FSharp.Editor
+open Microsoft.VisualStudio.FSharp.LanguageService.SiteProvider
 
 type internal FSharpLanguageServiceTestable() as this =
     static let colorizerGuid = new Guid("{A2976312-7D71-4BB4-A5F8-66A08EBF46C8}") // Guid for colorized user data on IVsTextBuffer
@@ -127,7 +127,7 @@ type internal FSharpLanguageServiceTestable() as this =
     /// Respond to project being cleaned/rebuilt (any live type providers in the project should be refreshed)
     member this.OnProjectCleaned(projectSite:IProjectSite) = 
         let enableInMemoryCrossProjectReferences = true
-        let _, checkOptions = ProjectSitesAndFiles.GetProjectOptionsForProjectSite(enableInMemoryCrossProjectReferences, (fun _ -> None), projectSite, "" ,None, serviceProvider.Value, false)
+        let _, checkOptions = ProjectSitesAndFiles.GetProjectOptionsForProjectSite(enableInMemoryCrossProjectReferences, (fun _ -> None), projectSite, serviceProvider.Value, None(*projectId*), "" ,None, None, false)
         this.FSharpChecker.NotifyProjectCleaned(checkOptions) |> Async.RunSynchronously
 
     member this.OnActiveViewChanged(textView) =
@@ -148,9 +148,9 @@ type internal FSharpLanguageServiceTestable() as this =
             match hier with 
             | :? IProvideProjectSite as siteProvider ->
                 let site = siteProvider.GetProjectSite()
-                site.AdviseProjectSiteChanges(FSharpConstants.FSharpLanguageServiceCallbackName, 
+                site.AdviseProjectSiteChanges(LanguageServiceConstants.FSharpLanguageServiceCallbackName, 
                                               new AdviseProjectSiteChanges(fun () -> this.OnProjectSettingsChanged(site))) 
-                site.AdviseProjectSiteCleaned(FSharpConstants.FSharpLanguageServiceCallbackName, 
+                site.AdviseProjectSiteCleaned(LanguageServiceConstants.FSharpLanguageServiceCallbackName, 
                                               new AdviseProjectSiteChanges(fun () -> this.OnProjectCleaned(site))) 
             | _ -> 
                 // This can happen when the file is in a solution folder or in, say, a C# project.
@@ -170,7 +170,7 @@ type internal FSharpLanguageServiceTestable() as this =
         member this.DependencyFileCreated projectSite = 
             let enableInMemoryCrossProjectReferences = true
             // Invalidate the configuration if we notice any add for any DependencyFiles 
-            let _, checkOptions = ProjectSitesAndFiles.GetProjectOptionsForProjectSite(enableInMemoryCrossProjectReferences, (fun _ -> None), projectSite, "", None, this.ServiceProvider, false)
+            let _, checkOptions = ProjectSitesAndFiles.GetProjectOptionsForProjectSite(enableInMemoryCrossProjectReferences, (fun _ -> None), projectSite, serviceProvider.Value, None(*projectId*),"" ,None, None, false)
             this.FSharpChecker.InvalidateConfiguration(checkOptions)
 
         member this.DependencyFileChanged (filename) = 

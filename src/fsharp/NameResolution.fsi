@@ -22,6 +22,9 @@ type NameResolver =
     member amap : ImportMap
     member g : TcGlobals
 
+/// Get the active pattern elements defined in a module, if any. Cache in the slot in the module type.
+val ActivePatternElemsOfModuleOrNamespace : ModuleOrNamespaceRef -> NameMap<ActivePatternElemRef>
+
 [<NoEquality; NoComparison; RequireQualifiedAccess>]
 /// Represents the item with which a named argument is associated.
 type ArgumentContainer =
@@ -243,9 +246,13 @@ type internal ItemOccurence =
     | Pattern 
     | Implemented 
     | RelatedText
+    | Open
   
 /// Check for equality, up to signature matching
 val ItemsAreEffectivelyEqual : TcGlobals -> Item -> Item -> bool
+
+/// Hash compatible with ItemsAreEffectivelyEqual
+val ItemsAreEffectivelyEqualHash : TcGlobals -> Item -> int
 
 [<Class>]
 type internal CapturedNameResolution = 
@@ -294,19 +301,52 @@ type internal TcResolutions =
     static member Empty : TcResolutions
 
 
+[<Struct>]
+type TcSymbolUseData = 
+   { Item: Item
+     ItemOccurence: ItemOccurence
+     DisplayEnv: DisplayEnv
+     Range: range }
+
 [<Class>]
 /// Represents container for all name resolutions that were met so far when typechecking some particular file
 type internal TcSymbolUses = 
 
     /// Get all the uses of a particular item within the file
-    member GetUsesOfSymbol : Item -> (ItemOccurence * DisplayEnv * range)[]
+    member GetUsesOfSymbol : Item -> TcSymbolUseData[]
 
-    /// Get all the uses of all items within the file
-    member GetAllUsesOfSymbols : unit -> (Item * ItemOccurence * DisplayEnv * range)[]
+    /// All the uses of all items within the file
+    member AllUsesOfSymbols : TcSymbolUseData[]
 
     /// Get the locations of all the printf format specifiers in the file
     member GetFormatSpecifierLocationsAndArity : unit -> (range * int)[]
 
+/// Represents open declaration statement.
+type internal OpenDeclaration =
+    { /// Long identifier as it's presented in soruce code.
+      LongId: Ident list
+      
+      /// Full range of the open declaration.
+      Range : range option
+
+      /// Modules or namespaces which is opened with this declaration.
+      Modules: ModuleOrNamespaceRef list 
+      
+      /// Scope in which open declaration is visible.
+      AppliedScope: range 
+      
+      /// If it's `namespace Xxx.Yyy` declaration.
+      IsOwnNamespace: bool }
+    
+    /// Create a new instance of OpenDeclaration.
+    static member Create : longId: Ident list * modules: ModuleOrNamespaceRef list * appliedScope: range * isOwnNamespace: bool -> OpenDeclaration
+    
+/// Line-end normalized source text and an array of line end positions, used for format string parsing
+type FormatStringCheckContext =
+    { /// Line-end normalized source text
+      NormalizedSource: string
+      /// Array of line end positions
+      LineEndPositions: int[] }
 
 /// An abstract type for reporting the results of name resolution and type checking
 type ITypecheckResultsSink =
@@ -323,8 +363,14 @@ type ITypecheckResultsSink =
     /// Record that a printf format specifier occurred at a specific location in the source
     abstract NotifyFormatSpecifierLocation : range * int -> unit
 
+    /// Record that an open declaration occured in a given scope range
+    abstract NotifyOpenDeclaration : OpenDeclaration -> unit
+
     /// Get the current source
     abstract CurrentSource : string option
+
+    /// Cached line-end normalized source text and an array of line end positions, used for format string parsing
+    abstract FormatStringCheckContext : FormatStringCheckContext option
 
 /// An implementation of ITypecheckResultsSink to collect information during type checking
 type internal TcResultsSinkImpl =
@@ -337,6 +383,10 @@ type internal TcResultsSinkImpl =
 
     /// Get all the uses of all symbols reported to the sink
     member GetSymbolUses : unit -> TcSymbolUses
+
+    /// Get all open declarations reported to the sink
+    member GetOpenDeclarations : unit -> OpenDeclaration[]
+
     interface ITypecheckResultsSink
 
 /// An abstract type for reporting the results of name resolution and type checking, and which allows
@@ -363,6 +413,9 @@ val internal CallNameResolutionSinkReplacing     : TcResultsSink -> range * Name
 
 /// Report a specific name resolution at a source range
 val internal CallExprHasTypeSink        : TcResultsSink -> range * NameResolutionEnv * TType * DisplayEnv * AccessorDomain -> unit
+
+/// Report an open declaration
+val internal CallOpenDeclarationSink    : TcResultsSink -> OpenDeclaration -> unit
 
 /// Get all the available properties of a type (both intrinsic and extension)
 val internal AllPropInfosOfTypeInScope : InfoReader -> NameResolutionEnv -> string option * AccessorDomain -> FindMemberFlag -> range -> TType -> PropInfo list
@@ -411,13 +464,13 @@ type ResultCollectionSettings =
 | AtMostOneResult
 
 /// Resolve a long identifier to a namespace or module.
-val internal ResolveLongIndentAsModuleOrNamespace   : ResultCollectionSettings -> Import.ImportMap -> range -> FullyQualifiedFlag -> NameResolutionEnv -> AccessorDomain -> Ident list -> ResultOrException<(int * ModuleOrNamespaceRef * ModuleOrNamespaceType) list >
+val internal ResolveLongIndentAsModuleOrNamespace   : TcResultsSink -> ResultCollectionSettings -> Import.ImportMap -> range -> bool -> FullyQualifiedFlag -> NameResolutionEnv -> AccessorDomain -> Ident -> Ident list -> isOpenDecl: bool -> ResultOrException<(int * ModuleOrNamespaceRef * ModuleOrNamespaceType) list >
 
 /// Resolve a long identifier to an object constructor.
 val internal ResolveObjectConstructor               : NameResolver -> DisplayEnv -> range -> AccessorDomain -> TType -> ResultOrException<Item>
 
 /// Resolve a long identifier using type-qualified name resolution.
-val internal ResolveLongIdentInType                 : TcResultsSink -> NameResolver -> NameResolutionEnv -> LookupKind -> range -> AccessorDomain -> Ident list -> FindMemberFlag -> TypeNameResolutionInfo -> TType -> Item * Ident list
+val internal ResolveLongIdentInType                 : TcResultsSink -> NameResolver -> NameResolutionEnv -> LookupKind -> range -> AccessorDomain -> Ident -> FindMemberFlag -> TypeNameResolutionInfo -> TType -> Item * Ident list
 
 /// Resolve a long identifier when used in a pattern.
 val internal ResolvePatternLongIdent                : TcResultsSink -> NameResolver -> WarnOnUpperFlag -> bool -> range -> AccessorDomain -> NameResolutionEnv -> TypeNameResolutionInfo -> Ident list -> Item
